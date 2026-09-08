@@ -1,0 +1,106 @@
+// Schema da plataforma de distribuição musical
+// Usa PostgreSQL (Railway, Neon, Supabase, etc.) — precisas de uma DATABASE_URL
+// no formato postgresql://utilizador:senha@host:porta/nome_da_bd
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ARTIST
+  ADMIN
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  name          String
+  role          Role      @default(ARTIST)
+  createdAt     DateTime  @default(now())
+
+  // Dados de artista
+  artistName        String?
+  stripeAccountId   String?   // ID da conta Stripe Connect (recebe pagamentos)
+  stripeOnboarded   Boolean   @default(false)
+
+  releases      Release[]
+  payoutRequests PayoutRequest[]
+}
+
+enum DistributionStatus {
+  DRAFT           // artista ainda está a preparar
+  IN_REVIEW       // enviado ao admin, aguardando aprovação
+  SUBMITTED       // admin submeteu ao agregador (ex: RouteNote)
+  LIVE            // já está a tocar nas plataformas
+  REJECTED
+  TAKEN_DOWN
+}
+
+model Release {
+  id                  String              @id @default(cuid())
+  title               String
+  artistId            String
+  artist              User                @relation(fields: [artistId], references: [id])
+  coverArtUrl         String?
+  releaseDate         DateTime?
+  upc                 String?             // código UPC (gerado quando vai a distribuição real)
+  distributionStatus  DistributionStatus  @default(DRAFT)
+  createdAt           DateTime            @default(now())
+
+  tracks              Track[]
+  revenueEntries      RevenueEntry[]
+}
+
+model Track {
+  id          String   @id @default(cuid())
+  releaseId   String
+  release     Release  @relation(fields: [releaseId], references: [id])
+  title       String
+  audioUrl    String   // caminho do ficheiro de áudio (local no MVP, S3 em produção)
+  isrc        String?  // código ISRC (gerado na distribuição real)
+  durationSec Int?
+  trackNumber Int      @default(1)
+  createdAt   DateTime @default(now())
+}
+
+// Cada linha = um pagamento de royalties recebido de uma DSP (Spotify, Apple, etc.)
+// para um release, registado manualmente pelo admin (ou importado de um relatório).
+// O split é calculado automaticamente pela % configurada na plataforma.
+model RevenueEntry {
+  id              String   @id @default(cuid())
+  releaseId       String
+  release         Release  @relation(fields: [releaseId], references: [id])
+  source          String   // "Spotify", "Apple Music", "YouTube Music", etc.
+  periodStart     DateTime
+  periodEnd       DateTime
+  grossAmountCents Int     // valor bruto recebido da DSP, em cêntimos
+  platformFeePct  Float    // % que a plataforma retém (ex: 15.0 = 15%)
+  artistAmountCents Int    // calculado: gross - (gross * platformFeePct/100)
+  currency        String   @default("EUR")
+  createdAt       DateTime @default(now())
+}
+
+enum PayoutStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+}
+
+model PayoutRequest {
+  id              String        @id @default(cuid())
+  artistId        String
+  artist          User          @relation(fields: [artistId], references: [id])
+  amountCents     Int
+  currency        String        @default("EUR")
+  status          PayoutStatus  @default(PENDING)
+  stripeTransferId String?
+  createdAt       DateTime      @default(now())
+  processedAt     DateTime?
+}
